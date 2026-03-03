@@ -1,0 +1,10 @@
+#c stuff
+*.so
+*.dll
+*.dylib
+*.o
+
+#py cache
+__pycache__/
+*.pyc
+*.pyo
