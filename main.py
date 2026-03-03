@@ -48,15 +48,76 @@ c_calc.get_cluster_lines.restype = None
 class MovingPointsApp(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.num_points = 200
+        
+        self.num_points = 80
         self.radius = 0.35
-        self.eps = 2.5
-        self.minPts = 10
-        self.cluster_limit = 5
+        self.eps = 2.8
+        self.minPts = 3
+        self.cluster_limit = 7
 
         self.paused = False
         self.pause_start_time = 0
         
+        self.main_widget = QtWidgets.QWidget()
+        self.setCentralWidget(self.main_widget)
+        self.main_layout = QtWidgets.QHBoxLayout(self.main_widget)
+        
+        self.graph_widget = pg.PlotWidget()
+        self.graph_widget.setXRange(-10, 10)
+        self.graph_widget.setYRange(-10, 10)
+        self.main_layout.addWidget(self.graph_widget, stretch=4)
+        
+        self.control_layout = QtWidgets.QVBoxLayout()
+        self.main_layout.addLayout(self.control_layout, stretch=1)
+        
+        self.control_layout.addWidget(QtWidgets.QLabel("EPS distance:"))
+        self.eps_spin = QtWidgets.QDoubleSpinBox()
+        self.eps_spin.setRange(0.1, 10.0)
+        self.eps_spin.setValue(self.eps)
+        self.eps_spin.setSingleStep(0.1)
+        self.eps_spin.valueChanged.connect(self.update_params)
+        self.control_layout.addWidget(self.eps_spin)
+        
+        self.control_layout.addWidget(QtWidgets.QLabel("MinPts:"))
+        self.minpts_spin = QtWidgets.QSpinBox()
+        self.minpts_spin.setRange(1, 100)
+        self.minpts_spin.setValue(self.minPts)
+        self.minpts_spin.valueChanged.connect(self.update_params)
+        self.control_layout.addWidget(self.minpts_spin)
+        
+        self.control_layout.addWidget(QtWidgets.QLabel("Max Cluster Limit:"))
+        self.limit_spin = QtWidgets.QSpinBox()
+        self.limit_spin.setRange(1, 100)
+        self.limit_spin.setValue(self.cluster_limit)
+        self.limit_spin.valueChanged.connect(self.update_params)
+        self.control_layout.addWidget(self.limit_spin)
+        
+        self.control_layout.addSpacing(20)
+        
+        self.control_layout.addWidget(QtWidgets.QLabel("Num Points:"))
+        self.points_spin = QtWidgets.QSpinBox()
+        self.points_spin.setRange(10, 5000)
+        self.points_spin.setValue(self.num_points)
+        self.points_spin.setSingleStep(50)
+        self.control_layout.addWidget(self.points_spin)
+        
+        self.apply_btn = QtWidgets.QPushButton("Reset to Apply Changes")
+        self.apply_btn.clicked.connect(self.apply_points)
+        self.control_layout.addWidget(self.apply_btn)
+        
+        self.control_layout.addStretch()
+
+        self.scatter = pg.ScatterPlotItem(size=12, pen=pg.mkPen(None))
+        self.graph_widget.addItem(self.scatter)
+        self.cluster_lines = {}
+        
+        self.init_arrays()
+
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update_data)
+        self.timer.start(20)
+        
+    def init_arrays(self):
         self.x = np.random.uniform(-9, 9, self.num_points).astype(np.float64)
         self.y = np.random.uniform(-9, 9, self.num_points).astype(np.float64)
         self.cluster_ids = np.zeros(self.num_points, dtype=np.int32)
@@ -71,27 +132,25 @@ class MovingPointsApp(QtWidgets.QMainWindow):
         self.out_y = np.zeros(max_lines * 2, dtype=np.float64)
         self.out_cids = np.zeros(max_lines, dtype=np.int32)
         self.total_lines = ctypes.c_int(0)
-        
-        self.graph_widget = pg.PlotWidget()
-        self.setCentralWidget(self.graph_widget)
-        self.graph_widget.setXRange(-10, 10)
-        self.graph_widget.setYRange(-10, 10)
-        
-        self.scatter = pg.ScatterPlotItem(size=12, pen=pg.mkPen(None))
-        self.graph_widget.addItem(self.scatter)
-        
+
         self.colors = [(100, 100, 100, 200)] + [
             (np.random.randint(50, 255), np.random.randint(50, 255), np.random.randint(50, 255), 200)
             for _ in range(self.num_points)
         ]
         self.brushes = [pg.mkBrush(c) for c in self.colors]
         
-        self.cluster_lines = {}
-        
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update_data)
-        self.timer.start(20)
-        
+    def update_params(self):
+        self.eps = self.eps_spin.value()
+        self.minPts = self.minpts_spin.value()
+        self.cluster_limit = self.limit_spin.value()
+
+    def apply_points(self):
+        self.num_points = self.points_spin.value()
+        self.init_arrays()
+        for line_item in self.cluster_lines.values():
+            self.graph_widget.removeItem(line_item)
+        self.cluster_lines.clear()
+
     def update_data(self):
         if self.paused:
             if time.time() - self.pause_start_time >= 0.1:
@@ -115,7 +174,7 @@ class MovingPointsApp(QtWidgets.QMainWindow):
             self.eps,
             self.minPts,
             self.cluster_ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
-            self.cluster_limit-1
+            self.cluster_limit - 1
         )
         
         c_calc.get_cluster_lines(
@@ -164,9 +223,10 @@ class MovingPointsApp(QtWidgets.QMainWindow):
                 
                 self.cluster_lines[cid].setData(x=valid_x[mask2], y=valid_y[mask2])
 
-        if cluster_count == self.cluster_limit:
+        if cluster_count >= self.cluster_limit:
             self.paused = True
             self.pause_start_time = time.time()
+
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
