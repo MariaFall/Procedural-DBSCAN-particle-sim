@@ -165,6 +165,11 @@ void run_dbscan(double* x, double* y, int n, double eps, int minPts, int* cluste
     int* neighbors = (int*)malloc(n * sizeof(int));
     int* seed_set = (int*)malloc(n * sizeof(int));
     bool* in_seed_set = (bool*)malloc(n * sizeof(bool));
+    
+    QuadtreeNode* root = create_node(0.0, 0.0, 10.0, 10.0, 4);
+    for (int i = 0; i < n; i++) {
+        insert(root, i, x[i], y[i]);
+    }
 
     for (int i = 0; i < n; i++) {
         if (cluster_ids[i] != -1) continue;
@@ -175,15 +180,19 @@ void run_dbscan(double* x, double* y, int n, double eps, int minPts, int* cluste
         }
 
         int neighbor_count = 0;
-        for (int j = 0; j < n; j++) {
-            double dx = x[i] - x[j];
-            double dy = y[i] - y[j];
+        query(root, x[i], y[i], eps, eps, neighbors, &neighbor_count);
+        
+        int actual_neighbors = 0;
+        for (int j = 0; j < neighbor_count; j++) {
+            int n_idx = neighbors[j];
+            double dx = x[i] - x[n_idx];
+            double dy = y[i] - y[n_idx];
             if (sqrt(dx*dx + dy*dy) <= eps) {
-                neighbors[neighbor_count++] = j;
+                neighbors[actual_neighbors++] = n_idx;
             }
         }
 
-        if (neighbor_count < minPts) {
+        if (actual_neighbors < minPts) {
             cluster_ids[i] = 0; 
         } else {
             cluster_idx++;
@@ -194,7 +203,7 @@ void run_dbscan(double* x, double* y, int n, double eps, int minPts, int* cluste
             }
 
             int seed_count = 0;
-            for (int j = 0; j < neighbor_count; j++) {
+            for (int j = 0; j < actual_neighbors; j++) {
                 int n_idx = neighbors[j];
                 if (n_idx != i) {
                     seed_set[seed_count++] = n_idx;
@@ -216,16 +225,20 @@ void run_dbscan(double* x, double* y, int n, double eps, int minPts, int* cluste
                 cluster_ids[current_p] = cluster_idx;
 
                 int inner_neighbor_count = 0;
-                for (int j = 0; j < n; j++) {
-                    double dx = x[current_p] - x[j];
-                    double dy = y[current_p] - y[j];
+                query(root, x[current_p], y[current_p], eps, eps, neighbors, &inner_neighbor_count);
+                
+                int actual_inner_neighbors = 0;
+                for (int j = 0; j < inner_neighbor_count; j++) {
+                    int n_idx = neighbors[j];
+                    double dx = x[current_p] - x[n_idx];
+                    double dy = y[current_p] - y[n_idx];
                     if (sqrt(dx*dx + dy*dy) <= eps) {
-                        neighbors[inner_neighbor_count++] = j;
+                        neighbors[actual_inner_neighbors++] = n_idx;
                     }
                 }
 
-                if (inner_neighbor_count >= minPts) {
-                    for (int j = 0; j < inner_neighbor_count; j++) {
+                if (actual_inner_neighbors >= minPts) {
+                    for (int j = 0; j < actual_inner_neighbors; j++) {
                         int n_idx = neighbors[j];
                         if (!in_seed_set[n_idx] && cluster_ids[n_idx] == -1) {
                             seed_set[seed_count++] = n_idx;
@@ -237,34 +250,111 @@ void run_dbscan(double* x, double* y, int n, double eps, int minPts, int* cluste
         }
     }
     
+    free_tree(root);
     free(neighbors);
     free(seed_set);
     free(in_seed_set);
 }
 
-void get_cluster_lines(double* x, double* y, int* cluster_ids, int n, double eps, double* out_x, double* out_y, int* out_cids, int* total_lines) {
-    int count = 0;
-    double eps_sq = eps * eps;
+void get_cluster_lines(double* x, double* y, int* cluster_ids, int n, double eps, 
+                       double* out_x, double* out_y, int* out_cids, int* total_lines, 
+                       double* out_cx, double* out_cy, double* out_d, int* out_circle_cids, int* total_circles) {
+    
+    double cluster_center_x[n];
+    double cluster_center_y[n];
+    int cluster_counts[n];
+    double cluster_diameters[n];
     
     for (int i = 0; i < n; i++) {
+        cluster_center_x[i] = 0.0;
+        cluster_center_y[i] = 0.0;
+        cluster_counts[i] = 0;
+        cluster_diameters[i] = 0.0;
+    }
+
+    for (int i = 0; i < n; i++) {
         int cid = cluster_ids[i];
-        if (cid <= 0) continue;
-        
-        for (int j = i + 1; j < n; j++) {
-            if (cluster_ids[j] == cid) {
+        if (cid > 0) {
+            cluster_center_x[cid] += x[i];
+            cluster_center_y[cid] += y[i];
+            cluster_counts[cid]++;
+        }
+    }
+
+    for (int i = 0; i < n; i++) {
+        if (cluster_counts[i] > 0) {
+            cluster_center_x[i] /= cluster_counts[i];
+            cluster_center_y[i] /= cluster_counts[i];
+        }
+    }
+    
+    int circle_count = 0;
+    for (int cid = 1; cid < n; cid++) {
+        if (cluster_counts[cid] < 2) continue;
+        double max_dist_sq = 0.0;
+        for (int i = 0; i < n; i++) {
+            if (cluster_ids[i] != cid) continue;
+            for (int j = i + 1; j < n; j++) {
+                if (cluster_ids[j] != cid) continue;
                 double dx = x[i] - x[j];
                 double dy = y[i] - y[j];
-                
-                if (dx*dx + dy*dy <= eps_sq) {
-                    out_x[count*2] = x[i];
-                    out_x[count*2 + 1] = x[j];
-                    out_y[count*2] = y[i];
-                    out_y[count*2 + 1] = y[j];
-                    out_cids[count] = cid;
-                    count++;
+                double dist_sq = dx * dx + dy * dy;
+                if (dist_sq > max_dist_sq) {
+                    max_dist_sq = dist_sq;
                 }
             }
         }
+        cluster_diameters[cid] = sqrt(max_dist_sq);
+        
+        out_cx[circle_count] = cluster_center_x[cid];
+        out_cy[circle_count] = cluster_center_y[cid];
+        out_d[circle_count] = cluster_diameters[cid];
+        out_circle_cids[circle_count] = cid;
+        circle_count++;
     }
+    *total_circles = circle_count;
+
+    int count = 0;
+    for (int cid = 1; cid < n; cid++) {
+        if (cluster_counts[cid] < 2) continue;
+        
+        double radius = cluster_diameters[cid] / 2.0;
+        double cx = cluster_center_x[cid];
+        double cy = cluster_center_y[cid];
+        
+        int queue[n];
+        int front = 0;
+        int rear = 0;
+
+        for (int i = 0; i < n; i++) {
+            if (cluster_ids[i] == cid) {
+                double dx = x[i] - cx;
+                double dy = y[i] - cy;
+                double dist = sqrt(dx * dx + dy * dy);
+                double diff = dist - radius;
+                if (diff < 0) diff = -diff;
+
+                if (diff < eps) {
+                    queue[rear] = i;
+                    rear++;
+                }
+            }
+        }
+
+        while (rear - front >= 2) {
+            int p1 = queue[front];
+            int p2 = queue[front + 1];
+
+            out_x[count*2] = x[p1];
+            out_x[count*2 + 1] = x[p2];
+            out_y[count*2] = y[p1];
+            out_y[count*2 + 1] = y[p2];
+            out_cids[count] = cid;
+            
+            count++;
+            front++;
+        }
+    }
+
     *total_lines = count;
 }

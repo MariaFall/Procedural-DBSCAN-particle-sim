@@ -40,10 +40,14 @@ c_calc.get_cluster_lines.argtypes = [
     ctypes.POINTER(ctypes.c_double),
     ctypes.POINTER(ctypes.c_double),
     ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int),
     ctypes.POINTER(ctypes.c_int)
 ]
 c_calc.get_cluster_lines.restype = None
-
 
 class MovingPointsApp(QtWidgets.QMainWindow):
     def __init__(self):
@@ -105,10 +109,18 @@ class MovingPointsApp(QtWidgets.QMainWindow):
         self.apply_btn.clicked.connect(self.apply_points)
         self.control_layout.addWidget(self.apply_btn)
         
+        self.control_layout.addSpacing(20)
+
+        self.show_circles_check = QtWidgets.QCheckBox("Show Circles")
+        self.show_circles_check.setChecked(True)
+        self.control_layout.addWidget(self.show_circles_check)
+        
         self.control_layout.addStretch()
 
         self.scatter = pg.ScatterPlotItem(size=12, pen=pg.mkPen(None))
+        self.circle_scatter = pg.ScatterPlotItem(pxMode=False)
         self.graph_widget.addItem(self.scatter)
+        self.graph_widget.addItem(self.circle_scatter)
         self.cluster_lines = {}
         
         self.init_arrays()
@@ -132,6 +144,12 @@ class MovingPointsApp(QtWidgets.QMainWindow):
         self.out_y = np.zeros(max_lines * 2, dtype=np.float64)
         self.out_cids = np.zeros(max_lines, dtype=np.int32)
         self.total_lines = ctypes.c_int(0)
+        
+        self.out_cx = np.zeros(self.num_points, dtype=np.float64)
+        self.out_cy = np.zeros(self.num_points, dtype=np.float64)
+        self.out_d = np.zeros(self.num_points, dtype=np.float64)
+        self.out_circle_cids = np.zeros(self.num_points, dtype=np.int32)
+        self.total_circles = ctypes.c_int(0)
 
         self.colors = [(100, 100, 100, 200)] + [
             (np.random.randint(50, 255), np.random.randint(50, 255), np.random.randint(50, 255), 200)
@@ -186,7 +204,12 @@ class MovingPointsApp(QtWidgets.QMainWindow):
             self.out_x.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
             self.out_y.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
             self.out_cids.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
-            ctypes.byref(self.total_lines)
+            ctypes.byref(self.total_lines),
+            self.out_cx.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            self.out_cy.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            self.out_d.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            self.out_circle_cids.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+            ctypes.byref(self.total_circles)
         )
 
         unique_clusters = np.unique(self.cluster_ids)
@@ -223,10 +246,33 @@ class MovingPointsApp(QtWidgets.QMainWindow):
                 
                 self.cluster_lines[cid].setData(x=valid_x[mask2], y=valid_y[mask2])
 
+        if self.show_circles_check.isChecked() and self.total_circles.value > 0:
+            c_count = self.total_circles.value
+            v_cx = self.out_cx[:c_count]
+            v_cy = self.out_cy[:c_count]
+            v_d = self.out_d[:c_count]
+            v_ccids = self.out_circle_cids[:c_count]
+            
+            circle_spots = []
+            for i in range(c_count):
+                cid = v_ccids[i]
+                base_color = self.colors[cid % len(self.colors)]
+                bg_color = (base_color[0], base_color[1], base_color[2], 30)
+                pen = pg.mkPen(base_color, width=2)
+                brush = pg.mkBrush(bg_color)
+                circle_spots.append({
+                    'pos': (v_cx[i], v_cy[i]),
+                    'size': v_d[i],
+                    'pen': pen,
+                    'brush': brush
+                })
+            self.circle_scatter.setData(circle_spots)
+        else:
+            self.circle_scatter.setData([])
+
         if cluster_count >= self.cluster_limit:
             self.paused = True
             self.pause_start_time = time.time()
-
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
